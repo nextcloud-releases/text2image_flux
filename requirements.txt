@@ -1,0 +1,4 @@
+nc_py_api[app]>=0.30.2
+stable-diffusion-cpp-python
+niquests
+pillow

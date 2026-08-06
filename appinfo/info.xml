@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<info>
+	<id>text2image_flux</id>
+	<name>Local Image Generation: Flux</name>
+	<summary>Text2Image provider using quantized FLUX.2 [klein] 4B by Black Forest Labs</summary>
+	<description>
+	<![CDATA[
+Text2Image provider using a quantized [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) model (GGUF Q4_0) via [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
+
+Runs with roughly 7GB VRAM. The models run completely on your machine. No private data leaves your servers.
+
+## Ethical AI Rating
+
+### Rating: 🟡
+
+Positive:
+
+* The software for training and inferencing of this model is open source
+* The trained model is freely available under Apache 2.0, and thus can be ran on-premises
+
+Negative:
+
+* The training data isn't freely available, making it not possible to check or correct for bias or optimise the performance and CO2 usage.
+]]>
+	</description>
+	<version>1.0.0</version>
+	<licence>agpl</licence>
+	<author mail="lukas@lschaefer.xyz" homepage="https://github.com/lukasdotcom">Lukas Schaefer</author>
+	<namespace>Text2ImageFlux</namespace>
+	<category>ai</category>
+	<category>tools</category>
+	<website>https://github.com/nextcloud/text2image_flux</website>
+	<bugs>https://github.com/nextcloud/text2image_flux/issues</bugs>
+	<repository type="git">https://github.com/nextcloud/text2image_flux</repository>
+	<dependencies>
+		<nextcloud min-version="30" max-version="35"/>
+	</dependencies>
+	<external-app>
+		<docker-install>
+			<registry>ghcr.io</registry>
+			<image>nextcloud/text2image_flux</image>
+			<image-tag>1.0.0</image-tag>
+		</docker-install>
+		<environment-variables>
+			<variable>
+				<name>NUM_INFERENCE_STEPS</name>
+				<display-name>Number of inference steps</display-name>
+				<description>Number of denoising steps used when generating images. Default is 4 (recommended for the distilled FLUX.2 [klein] 4B model).</description>
+			</variable>
+			<variable>
+				<name>DEFAULT_SIZE</name>
+				<display-name>Default image size</display-name>
+				<description>Default size of generated images in WxH format (for example 1024x1024). Used when no size is provided with the task. Default is 1024x1024.</description>
+			</variable>
+		</environment-variables>
+	</external-app>
+</info>
