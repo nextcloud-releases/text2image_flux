@@ -2,10 +2,10 @@
 <info>
 	<id>text2image_flux</id>
 	<name>Local Image Generation: Flux</name>
-	<summary>Text2Image provider using quantized FLUX.2 [klein] 4B by Black Forest Labs</summary>
+	<summary>Local text-to-image and image editing using quantized FLUX.2 [klein] 4B by Black Forest Labs</summary>
 	<description>
 	<![CDATA[
-Text2Image provider using a quantized [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) model (GGUF Q4_0) via [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
+Text-to-image and image editing provider using a quantized [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) model (GGUF Q4_0) via [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 
 Runs with roughly 7GB VRAM. The models run completely on your machine. No private data leaves your servers.
 
@@ -50,7 +50,7 @@ Negative:
 			<variable>
 				<name>DEFAULT_SIZE</name>
 				<display-name>Default image size</display-name>
-				<description>Default size of generated images in WxH format (for example 1024x1024). Used when no size is provided with the task. Default is 1024x1024.</description>
+				<description>Default size of generated or edited images in WxH format (for example 1024x1024). Used when no size is provided with the task. Default is 1024x1024.</description>
 			</variable>
 		</environment-variables>
 	</external-app>

@@ -1,9 +1,3 @@
-"""FLUX.2 [klein] 4B Text2Image ExApp (GGUF quantized via stable-diffusion.cpp).
-
-Provides Nextcloud TaskProcessing providers for core:text2image using
-Black Forest Labs FLUX.2 [klein] 4B Q4_0 weights through stable-diffusion.cpp.
-"""
-
 import asyncio
 import io
 import logging
@@ -26,6 +20,7 @@ from nc_py_api.ex_app import (
     set_handlers,
 )
 from nc_py_api.ex_app.providers.task_processing import ShapeDescriptor, ShapeType, TaskProcessingProvider
+from niquests import codes
 from niquests.exceptions import RequestException
 from PIL import ImageDraw, ImageFont, PngImagePlugin
 from stable_diffusion_cpp import StableDiffusion
@@ -51,6 +46,7 @@ def log(nc, level, content):
 
 TASKPROCESSING_PROVIDER_ID_BASIC = "text2image_flux:flux2_klein"
 TASKPROCESSING_PROVIDER_ID_ENHANCED = "text2image_flux:flux2_klein_enhanced"
+TASKPROCESSING_PROVIDER_ID_EDIT = "text2image_flux:flux2_klein_edit"
 DEFAULT_SIZE = os.getenv("DEFAULT_SIZE", "1024x1024")
 DEFAULT_GUIDANCE_SCALE = 1.0
 
@@ -77,6 +73,13 @@ TRIGGER = Event()
 WAIT_INTERVAL = 5
 WAIT_INTERVAL_WITH_TRIGGER = 5 * 60
 WATERMARK_COMMENT = "Generated using Artificial Intelligence"
+
+PROVIDER_IDS = [
+    TASKPROCESSING_PROVIDER_ID_BASIC,
+    TASKPROCESSING_PROVIDER_ID_ENHANCED,
+    TASKPROCESSING_PROVIDER_ID_EDIT,
+]
+TASK_TYPES = ["core:text2image", "core:image2image"]
 
 
 def load_model() -> StableDiffusion:
@@ -190,10 +193,7 @@ def background_thread_task():
             sleep(30)
             continue
         try:
-            next_task = nc.providers.task_processing.next_task(
-                [TASKPROCESSING_PROVIDER_ID_BASIC, TASKPROCESSING_PROVIDER_ID_ENHANCED],
-                ["core:text2image"],
-            )
+            next_task = nc.providers.task_processing.next_task(PROVIDER_IDS, TASK_TYPES)
             if next_task is None or "task" not in next_task:
                 wait_for_task()
                 continue
@@ -214,9 +214,58 @@ def background_thread_task():
             wait_for_task(30)
 
 
+def download_task_file(nc: NextcloudApp, task_id: int, file_id: int) -> PIL.Image.Image:
+    session = nc._session
+    session.init_adapter()
+    path = f"/ocs/v2.php/taskprocessing/tasks_provider/{task_id}/file/{file_id}"
+    info = f"request: GET {path}"
+    response = session.adapter.request("GET", path, stream=True)
+    status_code = response.status_code
+    if 996 <= status_code <= 999:
+        if status_code == 996:
+            phrase = "Server error"
+        elif status_code == 997:
+            phrase = "Unauthorised"
+        elif status_code == 998:
+            phrase = "Not found"
+        else:
+            phrase = "Unknown error"
+        raise NextcloudException(status_code, reason=phrase, info=info)
+    if status_code >= 400:
+        raise NextcloudException(status_code, reason=codes(status_code).phrase, info=info)
+    buf = io.BytesIO()
+    for chunk in response.iter_content(chunk_size=8192):
+        if chunk:
+            buf.write(chunk)
+    buf.seek(0)
+    return PIL.Image.open(buf).convert("RGB")
+
+
+def upload_result_image(nc: NextcloudApp, task_id: int, image: PIL.Image.Image) -> int:
+    mark_image(image)
+    png_stream = io.BytesIO()
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text("Comment", WATERMARK_COMMENT)
+    image.save(png_stream, format="PNG", pnginfo=metadata)
+    png_stream.seek(0)
+    return nc.providers.task_processing.upload_result_file(task_id, png_stream)
+
+
+def parse_size(size: str) -> tuple[int, int]:
+    width, height = size.split("x")
+    return int(width), int(height)
+
+
 def handle_task(nc: NextcloudApp, task: dict, provider_id: str, pipe: StableDiffusion):
     log(nc, LogLvl.INFO, f"Next task: {task['id']}")
+    task_type = task.get("type")
+    if provider_id == TASKPROCESSING_PROVIDER_ID_EDIT or task_type == "core:image2image":
+        handle_image2image(nc, task, pipe)
+    else:
+        handle_text2image(nc, task, provider_id, pipe)
 
+
+def handle_text2image(nc: NextcloudApp, task: dict, provider_id: str, pipe: StableDiffusion):
     number_of_images = task.get("input", {}).get("numberOfImages") or 1
     if number_of_images > 12 or number_of_images < 1:
         nc.providers.task_processing.report_result(task["id"], None, "numberOfImages is out of bounds")
@@ -255,17 +304,15 @@ def handle_task(nc: NextcloudApp, task: dict, provider_id: str, pipe: StableDiff
     log(nc, LogLvl.INFO, f"prompt: {prompt}")
 
     size = task.get("input", {}).get("size") or DEFAULT_SIZE
-    width, height = size.split("x")
-    width = int(width)
-    height = int(height)
+    width, height = parse_size(size)
     inference_steps = int(os.getenv("NUM_INFERENCE_STEPS", 4))
-
-    img_ids = []
 
     def on_progress(step: int, steps: int, _time: float):
         if steps <= 0:
             return
-        NextcloudApp().providers.task_processing.set_progress(task.get("id"), progress + (step + 1) / steps * (100 - progress))
+        NextcloudApp().providers.task_processing.set_progress(
+            task.get("id"), progress + (step + 1) / steps * (100 - progress)
+        )
 
     images = pipe.generate_image(
         prompt=prompt,
@@ -278,18 +325,62 @@ def handle_task(nc: NextcloudApp, task: dict, provider_id: str, pipe: StableDiff
         progress_callback=on_progress,
     )
 
-    for image in images:
-        mark_image(image)
-        png_stream = io.BytesIO()
-        metadata = PngImagePlugin.PngInfo()
-        metadata.add_text("Comment", WATERMARK_COMMENT)
-        image.save(png_stream, format="PNG", pnginfo=metadata)
-        png_stream.seek(0)
-        img_ids.append(nc.providers.task_processing.upload_result_file(task.get("id"), png_stream))
+    img_ids = [upload_result_image(nc, task.get("id"), image) for image in images]
 
     log(nc, LogLvl.INFO, f"image generated: {perf_counter() - time_start}s")
     result["images"] = img_ids
     NextcloudApp().providers.task_processing.report_result(task["id"], result)
+
+
+def handle_image2image(nc: NextcloudApp, task: dict, pipe: StableDiffusion):
+    task_input = task.get("input", {})
+    file_ids = task_input.get("input") or []
+    prompt = task_input.get("prompt")
+
+    if not isinstance(file_ids, list) or len(file_ids) == 0:
+        nc.providers.task_processing.report_result(task["id"], None, "input images are required")
+        return
+    if not isinstance(prompt, str) or not prompt.strip():
+        nc.providers.task_processing.report_result(task["id"], None, "prompt is required")
+        return
+
+    log(nc, LogLvl.INFO, "editing image")
+    time_start = perf_counter()
+    nc.set_user(task["userId"])
+
+    ref_images = [download_task_file(nc, task["id"], int(file_id)) for file_id in file_ids]
+    log(nc, LogLvl.INFO, f"loaded {len(ref_images)} reference image(s)")
+
+    size = task_input.get("size") or DEFAULT_SIZE
+    width, height = parse_size(size)
+
+    inference_steps = int(os.getenv("NUM_INFERENCE_STEPS", 4))
+    log(nc, LogLvl.INFO, f"prompt: {prompt}")
+
+    def on_progress(step: int, steps: int, _time: float):
+        if steps <= 0:
+            return
+        NextcloudApp().providers.task_processing.set_progress(task.get("id"), (step + 1) / steps * 100)
+
+    images = pipe.generate_image(
+        prompt=prompt,
+        ref_images=ref_images,
+        height=height,
+        width=width,
+        cfg_scale=DEFAULT_GUIDANCE_SCALE,
+        sample_steps=inference_steps,
+        sample_method="euler",
+        batch_count=1,
+        progress_callback=on_progress,
+    )
+
+    if not images:
+        nc.providers.task_processing.report_result(task["id"], None, "image editing produced no output")
+        return
+
+    output_id = upload_result_image(nc, task.get("id"), images[0])
+    log(nc, LogLvl.INFO, f"image edited: {perf_counter() - time_start}s")
+    NextcloudApp().providers.task_processing.report_result(task["id"], {"output": output_id})
 
 
 async def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
@@ -341,10 +432,30 @@ async def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
                 ],
             )
         )
+        await nc.providers.task_processing.register(
+            TaskProcessingProvider(
+                id=TASKPROCESSING_PROVIDER_ID_EDIT,
+                name="Nextcloud Local Image Editing: Flux 2 Klein 4B",
+                task_type="core:image2image",
+                expected_runtime=60,
+                optional_input_shape=[
+                    ShapeDescriptor(
+                        name="size",
+                        description=(
+                            "Optional. The size of the edited image. "
+                            "Must be in 1024x1024 format. Default is 1024x1024"
+                        ),
+                        shape_type=ShapeType.TEXT,
+                    ),
+                ],
+                input_shape_defaults={"size": DEFAULT_SIZE},
+            )
+        )
         app_enabled.set()
     else:
         await nc.providers.task_processing.unregister(TASKPROCESSING_PROVIDER_ID_BASIC, True)
         await nc.providers.task_processing.unregister(TASKPROCESSING_PROVIDER_ID_ENHANCED, True)
+        await nc.providers.task_processing.unregister(TASKPROCESSING_PROVIDER_ID_EDIT, True)
         await nc.log(LogLvl.WARNING, f"Disabled {nc.app_cfg.app_name}")
         app_enabled.clear()
     return ""
