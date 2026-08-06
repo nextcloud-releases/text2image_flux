@@ -1,6 +1,6 @@
 # Nextcloud Local Image Generation: Flux
 
-An ExApp that generates images from text using a quantized [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) model (GGUF Q4_0) via [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
+An ExApp that generates images from text (`core:text2image`) and edits images from a prompt (`core:image2image`) using a quantized [FLUX.2 [klein] 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) model (GGUF Q4_0) via [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 
 Weights downloaded on init:
 

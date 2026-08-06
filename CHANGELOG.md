@@ -10,3 +10,4 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Added
 
 * Initial release with quantized FLUX.2 [klein] 4B (GGUF Q4_0) text-to-image providers (basic and enhanced) via stable-diffusion.cpp
+* Image editing provider for `core:image2image` using FLUX.2 [klein] reference images
