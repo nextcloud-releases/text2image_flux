@@ -19,7 +19,12 @@ from nc_py_api.ex_app import (
     run_app,
     set_handlers,
 )
-from nc_py_api.ex_app.providers.task_processing import ShapeDescriptor, ShapeType, TaskProcessingProvider
+from nc_py_api.ex_app.providers.task_processing import (
+    ShapeDescriptor,
+    ShapeType,
+    TaskProcessingProvider,
+    TaskType,
+)
 from niquests import codes
 from niquests.exceptions import RequestException
 from PIL import ImageDraw, ImageFont, PngImagePlugin
@@ -47,6 +52,8 @@ def log(nc, level, content):
 TASKPROCESSING_PROVIDER_ID_BASIC = "text2image_flux:flux2_klein"
 TASKPROCESSING_PROVIDER_ID_ENHANCED = "text2image_flux:flux2_klein_enhanced"
 TASKPROCESSING_PROVIDER_ID_EDIT = "text2image_flux:flux2_klein_edit"
+TASKPROCESSING_TYPE_EDIT = "core:image2image"
+TASKPROCESSING_TYPE_EDIT_FALLBACK = "text2image_flux:image2image"
 DEFAULT_SIZE = os.getenv("DEFAULT_SIZE", "1024x1024")
 DEFAULT_GUIDANCE_SCALE = 1.0
 
@@ -79,7 +86,7 @@ PROVIDER_IDS = [
     TASKPROCESSING_PROVIDER_ID_ENHANCED,
     TASKPROCESSING_PROVIDER_ID_EDIT,
 ]
-TASK_TYPES = ["core:text2image", "core:image2image"]
+TASK_TYPES = ["core:text2image", TASKPROCESSING_TYPE_EDIT]
 
 
 def load_model() -> StableDiffusion:
@@ -95,6 +102,7 @@ def load_model() -> StableDiffusion:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global TASKPROCESSING_TYPE_EDIT, TASK_TYPES
     set_handlers(
         APP,
         enabled_handler,
@@ -102,6 +110,10 @@ async def lifespan(_app: FastAPI):
         models_to_fetch=models_to_fetch,
     )
     nc = NextcloudApp()
+    # Use a custom image2image task type on Nextcloud <= 35
+    if nc.srv_version.get("major") <= 35:
+        TASKPROCESSING_TYPE_EDIT = TASKPROCESSING_TYPE_EDIT_FALLBACK
+        TASK_TYPES = ["core:text2image", TASKPROCESSING_TYPE_EDIT]
     if nc.enabled_state:
         app_enabled.set()
     start_bg_task()
@@ -259,7 +271,10 @@ def parse_size(size: str) -> tuple[int, int]:
 def handle_task(nc: NextcloudApp, task: dict, provider_id: str, pipe: StableDiffusion):
     log(nc, LogLvl.INFO, f"Next task: {task['id']}")
     task_type = task.get("type")
-    if provider_id == TASKPROCESSING_PROVIDER_ID_EDIT or task_type == "core:image2image":
+    if (
+        provider_id == TASKPROCESSING_PROVIDER_ID_EDIT
+        or task_type in ("core:image2image", TASKPROCESSING_TYPE_EDIT_FALLBACK)
+    ):
         handle_image2image(nc, task, pipe)
     else:
         handle_text2image(nc, task, provider_id, pipe)
@@ -384,6 +399,7 @@ def handle_image2image(nc: NextcloudApp, task: dict, pipe: StableDiffusion):
 
 
 async def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
+    global TASKPROCESSING_TYPE_EDIT, TASK_TYPES
     print(f"enabled={enabled}")
     if enabled:
         await nc.log(LogLvl.WARNING, f"Enabled: {nc.app_cfg.app_name}")
@@ -432,11 +448,42 @@ async def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
                 ],
             )
         )
+        new_task_type = None
+        TASKPROCESSING_TYPE_EDIT = "core:image2image"
+        # Use a custom image2image task type on Nextcloud <= 35
+        if (await nc.srv_version).get("major") <= 35:
+            await nc.log(LogLvl.INFO, f"Creating custom image2image task type for {nc.app_cfg.app_name}")
+            new_task_type = TaskType(
+                id=TASKPROCESSING_TYPE_EDIT_FALLBACK,
+                name="Edit image",
+                description="Edit an image based on a text description of the changes",
+                input_shape=[
+                    ShapeDescriptor(
+                        name="input",
+                        description="The images to edit",
+                        shape_type=ShapeType.LIST_OF_IMAGES,
+                    ),
+                    ShapeDescriptor(
+                        name="prompt",
+                        description="Describe the changes you want to make to the image",
+                        shape_type=ShapeType.TEXT,
+                    ),
+                ],
+                output_shape=[
+                    ShapeDescriptor(
+                        name="output",
+                        description="The edited image",
+                        shape_type=ShapeType.IMAGE,
+                    ),
+                ],
+            )
+            TASKPROCESSING_TYPE_EDIT = TASKPROCESSING_TYPE_EDIT_FALLBACK
+        TASK_TYPES = ["core:text2image", TASKPROCESSING_TYPE_EDIT]
         await nc.providers.task_processing.register(
             TaskProcessingProvider(
                 id=TASKPROCESSING_PROVIDER_ID_EDIT,
                 name="Nextcloud Local Image Editing: Flux 2 Klein 4B",
-                task_type="core:image2image",
+                task_type=TASKPROCESSING_TYPE_EDIT,
                 expected_runtime=60,
                 optional_input_shape=[
                     ShapeDescriptor(
@@ -449,7 +496,8 @@ async def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
                     ),
                 ],
                 input_shape_defaults={"size": DEFAULT_SIZE},
-            )
+            ),
+            new_task_type,
         )
         app_enabled.set()
     else:
