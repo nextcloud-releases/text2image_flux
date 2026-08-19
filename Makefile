@@ -31,7 +31,7 @@ help:
 .PHONY: build-push
 build-push:
 	docker login ghcr.io
-	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag ghcr.io/nextcloud/$(APP_ID):latest --tag ghcr.io/nextcloud/$(APP_ID):$(APP_VERSION) .
+	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud/$(APP_ID):latest --tag ghcr.io/nextcloud/$(APP_ID):$(APP_VERSION) .
 
 .PHONY: run30
 run30:
